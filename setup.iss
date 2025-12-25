@@ -25,8 +25,8 @@ PrivilegesRequired=admin
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checked
-Name: "startupicon"; Description: "Start AutoScreen when Windows starts"; GroupDescription: "Startup:"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "startupicon"; Description: "Start AutoScreen when Windows starts"; GroupDescription: "Startup:"
 
 [Files]
 Source: "dist\AutoScreen.exe"; DestDir: "{app}"; Flags: ignoreversion
