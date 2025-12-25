@@ -5,6 +5,7 @@ import os
 import sys
 import json
 import threading
+import queue
 from datetime import datetime
 from pathlib import Path
 
@@ -33,6 +34,8 @@ class ScreenshotApp:
         self.tray_icon = None
         self.running = True
         self.settings_window = None
+        self.root = None
+        self.action_queue = queue.Queue()
 
     def load_config(self):
         if CONFIG_FILE.exists():
@@ -169,11 +172,11 @@ class ScreenshotApp:
 
         menu = pystray.Menu(
             pystray.MenuItem("Take Screenshot", lambda: self.take_screenshot()),
-            pystray.MenuItem("Settings", lambda: threading.Thread(target=self.show_settings, daemon=True).start()),
+            pystray.MenuItem("Settings", lambda: self.action_queue.put("settings")),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Open Screenshots Folder", lambda: self.open_folder()),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Exit", lambda: self.quit_app())
+            pystray.MenuItem("Exit", lambda: self.action_queue.put("quit"))
         )
 
         self.tray_icon = pystray.Icon("AutoScreen", image, "AutoScreen", menu)
@@ -187,7 +190,7 @@ class ScreenshotApp:
             os.makedirs(folder, exist_ok=True)
             os.startfile(folder)
 
-    def show_settings(self):
+    def show_settings(self, standalone=False):
         if self.settings_window:
             try:
                 if self.settings_window.winfo_exists():
@@ -197,7 +200,10 @@ class ScreenshotApp:
             except:
                 pass
 
-        self.settings_window = tk.Tk()
+        if standalone:
+            self.settings_window = tk.Tk()
+        else:
+            self.settings_window = tk.Toplevel(self.root)
         self.settings_window.title("AutoScreen Settings")
         self.settings_window.geometry("500x600")
         self.settings_window.resizable(False, False)
@@ -311,7 +317,8 @@ class ScreenshotApp:
         cancel_btn.pack(side="right", padx=5)
 
         self.settings_window.protocol("WM_DELETE_WINDOW", self.settings_window.destroy)
-        self.settings_window.mainloop()
+        if standalone:
+            self.settings_window.mainloop()
 
     def browse_folder(self):
         folder = filedialog.askdirectory(initialdir=self.folder_var.get())
@@ -374,7 +381,23 @@ class ScreenshotApp:
                 pass
         if self.tray_icon:
             self.tray_icon.stop()
+        if self.root:
+            self.root.quit()
+            self.root.destroy()
         sys.exit(0)
+
+    def process_queue(self):
+        try:
+            while True:
+                action = self.action_queue.get_nowait()
+                if action == "settings":
+                    self.show_settings(standalone=False)
+                elif action == "quit":
+                    self.quit_app()
+        except queue.Empty:
+            pass
+        if self.running and self.root:
+            self.root.after(100, self.process_queue)
 
     def run(self):
         print("AutoScreen starting...")
@@ -388,13 +411,23 @@ class ScreenshotApp:
         print("\nAutoScreen is running in the system tray.")
         print("Right-click the tray icon for options.")
 
-        icon.run()
+        # Create hidden root window for tkinter
+        self.root = tk.Tk()
+        self.root.withdraw()
+
+        # Run tray icon in background thread
+        tray_thread = threading.Thread(target=icon.run, daemon=True)
+        tray_thread.start()
+
+        # Process queue on main thread
+        self.root.after(100, self.process_queue)
+        self.root.mainloop()
 
 
 def main():
     if not CONFIG_FILE.exists():
         app = ScreenshotApp()
-        app.show_settings()
+        app.show_settings(standalone=True)
         if app.running:
             app.run()
     else:
