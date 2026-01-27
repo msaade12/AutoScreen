@@ -111,31 +111,88 @@ class AutoScreenApp(rumps.App):
         with open(CONFIG_FILE, "w") as f:
             json.dump(self.config, f, indent=2)
 
+    def get_monitor_mapping(self):
+        """Get monitors sorted by left position. Returns (all_monitors, sorted_list, display_to_mss_map)."""
+        with mss.mss() as sct:
+            monitors = sct.monitors
+            # monitors[0] is "all", monitors[1+] are individual
+            individual = [(i, m) for i, m in enumerate(monitors) if i > 0]
+            # Sort by left position (leftmost = Monitor 1)
+            sorted_mons = sorted(individual, key=lambda x: x[1]['left'])
+            # Map display number (1, 2, ...) to mss index
+            mapping = {disp_num: mss_idx for disp_num, (mss_idx, _) in enumerate(sorted_mons, start=1)}
+            return monitors, sorted_mons, mapping
+
     def create_monitor_menu(self):
         menu = rumps.MenuItem("Capture Screen")
-        with mss.mss() as sct:
-            for i, m in enumerate(sct.monitors):
-                if i == 0:
-                    label = f"All Monitors ({m['width']}x{m['height']})"
-                    value = "all"
-                else:
-                    label = f"Monitor {i} ({m['width']}x{m['height']})"
-                    value = str(i)
+        monitors, sorted_mons, self.monitor_map = self.get_monitor_mapping()
 
-                item = rumps.MenuItem(label, callback=lambda sender, v=value: self.set_monitor(v))
-                if self.config["monitor"] == value:
-                    item.state = 1
-                menu.add(item)
+        # "All Monitors" first
+        m = monitors[0]
+        item = rumps.MenuItem(f"All Monitors ({m['width']}x{m['height']})",
+                              callback=lambda sender: self.set_monitor("all"))
+        if self.config["monitor"] == "all":
+            item.state = 1
+        menu.add(item)
+
+        # Individual monitors - display_num is 1, 2, ... (leftmost first)
+        for display_num, (mss_idx, m) in enumerate(sorted_mons, start=1):
+            label = f"Monitor {display_num} ({m['width']}x{m['height']})"
+            value = str(mss_idx)
+            item = rumps.MenuItem(label, callback=lambda sender, v=value: self.set_monitor(v))
+            if self.config["monitor"] == value:
+                item.state = 1
+            menu.add(item)
+
+        menu.add(rumps.separator)
+        menu.add(rumps.MenuItem("Identify Monitors", callback=self.identify_monitors))
         return menu
+
+    def identify_monitors(self, _):
+        """Show monitor number on each screen."""
+        monitors, sorted_mons, _ = self.get_monitor_mapping()
+        for display_num, (mss_idx, m) in enumerate(sorted_mons, start=1):
+            script = f'''
+            display dialog "Monitor {display_num}
+{m['width']}x{m['height']}" buttons {{"OK"}} default button "OK" giving up after 3 with title "AutoScreen"
+            '''
+            subprocess.Popen(['osascript', '-e', script])
 
     def set_monitor(self, value):
         self.config["monitor"] = value
         self.save_config()
-        # Update menu checkmarks
+        # Update menu checkmarks - find the matching mss index
         for item in self.menu["Capture Screen"].values():
             if hasattr(item, 'state'):
-                item.state = 0
-        rumps.notification("AutoScreen", "Monitor Changed", f"Now capturing: {value}")
+                title = str(item.title) if hasattr(item, 'title') else ""
+                if value == "all" and "All Monitors" in title:
+                    item.state = 1
+                elif value != "all" and value == self._get_mss_idx_for_menu_item(title):
+                    item.state = 1
+                else:
+                    item.state = 0
+
+        # Show friendly name in notification
+        if value == "all":
+            name = "All Monitors"
+        else:
+            # Find display number for this mss index
+            for disp, idx in getattr(self, 'monitor_map', {}).items():
+                if str(idx) == value:
+                    name = f"Monitor {disp}"
+                    break
+            else:
+                name = f"Monitor {value}"
+        rumps.notification("AutoScreen", "Monitor Changed", f"Now capturing: {name}")
+
+    def _get_mss_idx_for_menu_item(self, title):
+        """Get the mss index for a menu item title like 'Monitor 1 (1920x1080)'."""
+        import re
+        match = re.search(r'Monitor (\d+)', title)
+        if match:
+            display_num = int(match.group(1))
+            return str(getattr(self, 'monitor_map', {}).get(display_num, display_num))
+        return None
 
     def create_hotkey_menu(self):
         menu = rumps.MenuItem("Hotkey")
@@ -344,17 +401,19 @@ class AutoScreenApp(rumps.App):
             filename = f"screenshot_{timestamp}.png"
             filepath = os.path.join(self.config["save_folder"], filename)
 
-            if self.config["monitor"] == "all":
-                screenshot = ImageGrab.grab(all_screens=True)
-            else:
-                monitor_num = int(self.config["monitor"])
-                with mss.mss() as sct:
+            with mss.mss() as sct:
+                if self.config["monitor"] == "all":
+                    # monitors[0] is the combined virtual screen of all monitors
+                    monitor = sct.monitors[0]
+                else:
+                    monitor_num = int(self.config["monitor"])
                     if monitor_num < len(sct.monitors):
                         monitor = sct.monitors[monitor_num]
-                        sct_img = sct.grab(monitor)
-                        screenshot = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
                     else:
-                        screenshot = ImageGrab.grab(all_screens=True)
+                        monitor = sct.monitors[0]
+
+                sct_img = sct.grab(monitor)
+                screenshot = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
 
             screenshot.save(filepath, "PNG")
             print(f"Screenshot saved: {filepath}")
