@@ -6,16 +6,142 @@ import sys
 import json
 import threading
 import queue
+import subprocess
+import tempfile
+import platform
+import io
 from datetime import datetime
 from pathlib import Path
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-import keyboard
 import pystray
 from PIL import Image, ImageDraw, ImageGrab, ImageFont
 import mss
+
+# Platform-specific imports
+if platform.system() == "Windows":
+    import ctypes
+    from ctypes import wintypes
+    import keyboard
+else:
+    # Use pynput on macOS/Linux (doesn't require root)
+    from pynput import keyboard as pynput_keyboard
+
+# Lock file for single instance
+LOCK_FILE = Path(tempfile.gettempdir()) / ".autoscreen.lock"
+
+
+def is_already_running():
+    """Check if another instance is already running using a lock file."""
+    try:
+        if platform.system() == "Windows":
+            # Windows: try to create/open lock file exclusively
+            if LOCK_FILE.exists():
+                # Try to remove stale lock file
+                try:
+                    LOCK_FILE.unlink()
+                except:
+                    pass
+            # Create lock file with our PID
+            try:
+                with open(LOCK_FILE, 'x') as f:
+                    f.write(str(os.getpid()))
+                return False
+            except FileExistsError:
+                # Check if the process is still running
+                try:
+                    with open(LOCK_FILE, 'r') as f:
+                        pid = int(f.read().strip())
+                    # Check if process exists
+                    kernel32 = ctypes.windll.kernel32
+                    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+                    if handle:
+                        kernel32.CloseHandle(handle)
+                        return True  # Process exists
+                    else:
+                        # Stale lock, remove and create new
+                        LOCK_FILE.unlink()
+                        with open(LOCK_FILE, 'x') as f:
+                            f.write(str(os.getpid()))
+                        return False
+                except:
+                    return True
+        else:
+            # macOS/Linux: use fcntl for file locking
+            import fcntl
+            global lock_file_handle
+            lock_file_handle = open(LOCK_FILE, 'w')
+            try:
+                fcntl.flock(lock_file_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                lock_file_handle.write(str(os.getpid()))
+                lock_file_handle.flush()
+                return False
+            except (IOError, OSError):
+                return True
+    except Exception as e:
+        print(f"Lock check error: {e}")
+        return False
+
+
+def copy_image_to_clipboard(image):
+    """Copy a PIL Image to the system clipboard."""
+    try:
+        if platform.system() == "Darwin":  # macOS
+            # Save to temp file and use osascript
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                image.save(tmp.name, 'PNG')
+                tmp_path = tmp.name
+
+            script = f'''
+            set the clipboard to (read (POSIX file "{tmp_path}") as «class PNGf»)
+            '''
+            subprocess.run(['osascript', '-e', script], check=True)
+            os.unlink(tmp_path)
+            print("Screenshot copied to clipboard")
+
+        elif platform.system() == "Windows":
+            # Use win32clipboard via ctypes
+            import ctypes
+            from ctypes import wintypes
+
+            # Convert image to BMP format for clipboard
+            output = io.BytesIO()
+            image.convert('RGB').save(output, 'BMP')
+            data = output.getvalue()[14:]  # Remove BMP header
+            output.close()
+
+            CF_DIB = 8
+            GMEM_MOVEABLE = 0x0002
+
+            kernel32 = ctypes.windll.kernel32
+            user32 = ctypes.windll.user32
+
+            user32.OpenClipboard(None)
+            user32.EmptyClipboard()
+
+            hMem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+            pMem = kernel32.GlobalLock(hMem)
+            ctypes.memmove(pMem, data, len(data))
+            kernel32.GlobalUnlock(hMem)
+
+            user32.SetClipboardData(CF_DIB, hMem)
+            user32.CloseClipboard()
+            print("Screenshot copied to clipboard")
+
+        else:  # Linux
+            # Try xclip
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                image.save(tmp.name, 'PNG')
+                tmp_path = tmp.name
+            subprocess.run(['xclip', '-selection', 'clipboard', '-t', 'image/png', '-i', tmp_path], check=True)
+            os.unlink(tmp_path)
+            print("Screenshot copied to clipboard")
+
+    except Exception as e:
+        print(f"Failed to copy to clipboard: {e}")
+
 
 # Config file path
 CONFIG_FILE = Path.home() / ".autoscreen_config.json"
@@ -138,29 +264,86 @@ class ScreenshotApp:
             screenshot.save(filepath, "PNG")
             print(f"Screenshot saved: {filepath}")
 
+            # Copy to clipboard
+            copy_image_to_clipboard(screenshot)
+
             if self.tray_icon:
-                self.tray_icon.notify("Screenshot Saved", f"Saved to {filename}")
+                self.tray_icon.notify("Screenshot Saved", f"Saved to {filename} (copied to clipboard)")
 
         except Exception as e:
             print(f"Error taking screenshot: {e}")
 
     def register_hotkey(self):
-        if self.hotkey_registered:
-            try:
-                keyboard.remove_hotkey(self.hotkey_registered)
-            except:
-                pass
-
         hotkey = self.config["hotkey"]
-        try:
-            self.hotkey_registered = keyboard.add_hotkey(
-                hotkey,
-                self.take_screenshot,
-                suppress=True
-            )
-            print(f"Hotkey registered: {hotkey}")
-        except Exception as e:
-            print(f"Error registering hotkey: {e}")
+
+        if platform.system() == "Windows":
+            # Windows: use keyboard library
+            if self.hotkey_registered:
+                try:
+                    keyboard.remove_hotkey(self.hotkey_registered)
+                except:
+                    pass
+            try:
+                self.hotkey_registered = keyboard.add_hotkey(
+                    hotkey,
+                    self.take_screenshot,
+                    suppress=True
+                )
+                print(f"Hotkey registered: {hotkey}")
+            except Exception as e:
+                print(f"Error registering hotkey: {e}")
+        else:
+            # macOS/Linux: use pynput (doesn't require root)
+            if self.hotkey_registered:
+                try:
+                    self.hotkey_registered.stop()
+                except:
+                    pass
+
+            # Parse hotkey string into pynput format
+            hotkey_parts = hotkey.lower().replace(' ', '').split('+')
+            hotkey_set = set()
+
+            for part in hotkey_parts:
+                if part in ('ctrl', 'control'):
+                    hotkey_set.add(pynput_keyboard.Key.ctrl)
+                elif part in ('alt', 'option'):
+                    hotkey_set.add(pynput_keyboard.Key.alt)
+                elif part in ('shift',):
+                    hotkey_set.add(pynput_keyboard.Key.shift)
+                elif part in ('cmd', 'command', 'super', 'win'):
+                    hotkey_set.add(pynput_keyboard.Key.cmd)
+                elif len(part) == 1:
+                    hotkey_set.add(pynput_keyboard.KeyCode.from_char(part))
+                else:
+                    # Try to get special key
+                    try:
+                        hotkey_set.add(getattr(pynput_keyboard.Key, part))
+                    except AttributeError:
+                        hotkey_set.add(pynput_keyboard.KeyCode.from_char(part[0]))
+
+            current_keys = set()
+
+            def on_press(key):
+                current_keys.add(key)
+                if hotkey_set.issubset(current_keys):
+                    self.take_screenshot()
+
+            def on_release(key):
+                try:
+                    current_keys.discard(key)
+                except:
+                    pass
+
+            try:
+                self.hotkey_registered = pynput_keyboard.Listener(
+                    on_press=on_press,
+                    on_release=on_release
+                )
+                self.hotkey_registered.start()
+                print(f"Hotkey registered: {hotkey}")
+            except Exception as e:
+                print(f"Error registering hotkey: {e}")
 
     def create_tray_icon(self):
         icon_size = 64
@@ -184,11 +367,13 @@ class ScreenshotApp:
 
     def open_folder(self):
         folder = self.config["save_folder"]
-        if os.path.exists(folder):
+        os.makedirs(folder, exist_ok=True)
+        if platform.system() == "Darwin":  # macOS
+            subprocess.run(["open", folder])
+        elif platform.system() == "Windows":
             os.startfile(folder)
-        else:
-            os.makedirs(folder, exist_ok=True)
-            os.startfile(folder)
+        else:  # Linux
+            subprocess.run(["xdg-open", folder])
 
     def show_settings(self, standalone=False):
         if self.settings_window:
@@ -332,22 +517,61 @@ class ScreenshotApp:
         )
         self.settings_window.update()
 
-        def record():
-            try:
-                hotkey = keyboard.read_hotkey(suppress=False)
-                if self.settings_window and self.settings_window.winfo_exists():
-                    self.settings_window.after(0, lambda: self.finish_recording(hotkey))
-            except Exception as e:
-                print(f"Error recording hotkey: {e}")
-                if self.settings_window and self.settings_window.winfo_exists():
-                    self.settings_window.after(0, lambda: self.finish_recording(self.config["hotkey"]))
+        # Use tkinter's native key binding instead of keyboard library (fixes macOS crash)
+        self.recording_keys = set()
 
-        threading.Thread(target=record, daemon=True).start()
+        def on_key_press(event):
+            # Build modifier string
+            modifiers = []
+            if event.state & 0x4:  # Control
+                modifiers.append("ctrl")
+            if event.state & 0x8:  # Alt/Option
+                modifiers.append("alt")
+            if event.state & 0x1:  # Shift
+                modifiers.append("shift")
+            if event.state & 0x40 or event.state & 0x80:  # Command (macOS)
+                modifiers.append("cmd")
+
+            # Get the key name
+            key = event.keysym.lower()
+
+            # Skip if it's just a modifier key
+            if key in ('control_l', 'control_r', 'alt_l', 'alt_r', 'shift_l', 'shift_r',
+                       'meta_l', 'meta_r', 'super_l', 'super_r'):
+                return
+
+            # Map some common key names
+            key_map = {
+                'return': 'enter',
+                'escape': 'esc',
+                'prior': 'page up',
+                'next': 'page down',
+                'print': 'print screen',
+            }
+            key = key_map.get(key, key)
+
+            # Build the hotkey string
+            if modifiers:
+                hotkey = '+'.join(modifiers + [key])
+            else:
+                hotkey = key
+
+            self.finish_recording(hotkey)
+
+        # Bind to the settings window
+        self.settings_window.bind('<Key>', on_key_press)
+        self.settings_window.focus_force()
 
     def finish_recording(self, hotkey):
+        # Unbind the key handler
+        try:
+            self.settings_window.unbind('<Key>')
+        except:
+            pass
+
         self.hotkey_var.set(hotkey)
         self.record_btn.config(
-            text="🎯 Click Here to Record New Hotkey",
+            text="RECORD NEW HOTKEY",
             bg="#0078D4"
         )
 
@@ -376,7 +600,10 @@ class ScreenshotApp:
         self.running = False
         if self.hotkey_registered:
             try:
-                keyboard.remove_hotkey(self.hotkey_registered)
+                if platform.system() == "Windows":
+                    keyboard.remove_hotkey(self.hotkey_registered)
+                else:
+                    self.hotkey_registered.stop()
             except:
                 pass
         if self.tray_icon:
@@ -384,6 +611,12 @@ class ScreenshotApp:
         if self.root:
             self.root.quit()
             self.root.destroy()
+        # Clean up lock file
+        try:
+            if LOCK_FILE.exists():
+                LOCK_FILE.unlink()
+        except:
+            pass
         sys.exit(0)
 
     def process_queue(self):
@@ -425,6 +658,16 @@ class ScreenshotApp:
 
 
 def main():
+    # Check if already running to prevent duplicate tray icons
+    if is_already_running():
+        print("AutoScreen is already running!")
+        # Show a message box to inform the user
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showwarning("AutoScreen", "AutoScreen is already running in the system tray.")
+        root.destroy()
+        sys.exit(0)
+
     if not CONFIG_FILE.exists():
         app = ScreenshotApp()
         app.show_settings(standalone=True)

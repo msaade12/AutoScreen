@@ -1,0 +1,95 @@
+name: Build AutoScreen
+
+on:
+  push:
+    branches: [main, master]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller rumps pynput Pillow mss
+
+      - name: Build macOS app
+        run: |
+          python -m PyInstaller --noconfirm --onedir --windowed \
+            --name AutoScreen \
+            --osx-bundle-identifier com.autoscreen.app \
+            --hidden-import rumps \
+            --hidden-import PIL \
+            --hidden-import mss \
+            --hidden-import pynput \
+            autoscreen_macos.py
+
+      - name: Create DMG
+        run: |
+          mkdir -p dist/dmg_temp
+          cp -R dist/AutoScreen.app dist/dmg_temp/
+          hdiutil create -volname "AutoScreen" -srcfolder dist/dmg_temp -ov -format UDZO dist/AutoScreen-macOS.dmg
+          rm -rf dist/dmg_temp
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoScreen-macOS
+          path: |
+            dist/AutoScreen.app
+            dist/AutoScreen-macOS.dmg
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pystray keyboard pynput Pillow mss
+
+      - name: Build Windows exe
+        run: |
+          python -m PyInstaller --noconfirm --onefile --windowed --name AutoScreen autoscreen.py
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoScreen-Windows
+          path: dist/AutoScreen.exe
+
+  release:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            AutoScreen-macOS/AutoScreen-macOS.dmg
+            AutoScreen-Windows/AutoScreen.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

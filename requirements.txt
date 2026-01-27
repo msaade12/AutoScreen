@@ -3,3 +3,4 @@ mss
 keyboard
 pystray
 pyinstaller
+pynput
