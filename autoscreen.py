@@ -177,70 +177,80 @@ class ScreenshotApp:
         with open(CONFIG_FILE, "w") as f:
             json.dump(self.config, f, indent=2)
 
-    def get_monitors(self):
+    def get_monitor_mapping(self):
+        """Get monitors sorted by left position. Returns (all_monitors, sorted_list, display_to_mss_map)."""
         with mss.mss() as sct:
-            monitors = []
-            for i, m in enumerate(sct.monitors):
-                if i == 0:
-                    monitors.append(("all", f"All Monitors ({m['width']}x{m['height']})"))
-                else:
-                    monitors.append((str(i), f"Monitor {i} ({m['width']}x{m['height']})"))
-            return monitors
+            monitors = sct.monitors
+            # monitors[0] is "all", monitors[1+] are individual
+            individual = [(i, m) for i, m in enumerate(monitors) if i > 0]
+            # Sort by left position (leftmost = Monitor 1)
+            sorted_mons = sorted(individual, key=lambda x: x[1]['left'])
+            # Map display number (1, 2, ...) to mss index
+            mapping = {disp_num: mss_idx for disp_num, (mss_idx, _) in enumerate(sorted_mons, start=1)}
+            return monitors, sorted_mons, mapping
+
+    def get_monitors(self):
+        monitors_list, sorted_mons, self.monitor_map = self.get_monitor_mapping()
+        result = []
+        # "All Monitors" first
+        m = monitors_list[0]
+        result.append(("all", f"All Monitors ({m['width']}x{m['height']})"))
+        # Individual monitors - display_num is 1, 2, ... (leftmost first)
+        for display_num, (mss_idx, m) in enumerate(sorted_mons, start=1):
+            result.append((str(mss_idx), f"Monitor {display_num} ({m['width']}x{m['height']})"))
+        return result
 
     def identify_monitors(self):
         """Show a big number on each monitor so user knows which is which."""
-        with mss.mss() as sct:
-            windows = []
-            for i, m in enumerate(sct.monitors):
-                if i == 0:
-                    continue  # Skip "all monitors" virtual screen
+        monitors_list, sorted_mons, _ = self.get_monitor_mapping()
+        windows = []
+        for display_num, (mss_idx, m) in enumerate(sorted_mons, start=1):
+            # Create a window for this monitor
+            win = tk.Toplevel()
+            win.title(f"Monitor {display_num}")
+            win.overrideredirect(True)  # No window decorations
+            win.attributes("-topmost", True)
+            win.configure(bg="#0078D4")
 
-                # Create a window for this monitor
-                win = tk.Toplevel()
-                win.title(f"Monitor {i}")
-                win.overrideredirect(True)  # No window decorations
-                win.attributes("-topmost", True)
-                win.configure(bg="#0078D4")
+            # Size and position on this monitor
+            width = 300
+            height = 200
+            x = m["left"] + (m["width"] - width) // 2
+            y = m["top"] + (m["height"] - height) // 2
+            win.geometry(f"{width}x{height}+{x}+{y}")
 
-                # Size and position on this monitor
-                width = 300
-                height = 200
-                x = m["left"] + (m["width"] - width) // 2
-                y = m["top"] + (m["height"] - height) // 2
-                win.geometry(f"{width}x{height}+{x}+{y}")
+            # Big number label
+            label = tk.Label(
+                win,
+                text=f"Monitor {display_num}",
+                font=("Segoe UI", 48, "bold"),
+                bg="#0078D4",
+                fg="white"
+            )
+            label.pack(expand=True, fill="both")
 
-                # Big number label
-                label = tk.Label(
-                    win,
-                    text=f"Monitor {i}",
-                    font=("Segoe UI", 48, "bold"),
-                    bg="#0078D4",
-                    fg="white"
-                )
-                label.pack(expand=True, fill="both")
+            # Size info
+            size_label = tk.Label(
+                win,
+                text=f"{m['width']} x {m['height']}",
+                font=("Segoe UI", 16),
+                bg="#0078D4",
+                fg="white"
+            )
+            size_label.pack(pady=(0, 20))
 
-                # Size info
-                size_label = tk.Label(
-                    win,
-                    text=f"{m['width']} x {m['height']}",
-                    font=("Segoe UI", 16),
-                    bg="#0078D4",
-                    fg="white"
-                )
-                size_label.pack(pady=(0, 20))
+            windows.append(win)
 
-                windows.append(win)
+        # Close all windows after 2 seconds
+        if windows:
+            def close_all():
+                for w in windows:
+                    try:
+                        w.destroy()
+                    except:
+                        pass
 
-            # Close all windows after 2 seconds
-            if windows:
-                def close_all():
-                    for w in windows:
-                        try:
-                            w.destroy()
-                        except:
-                            pass
-
-                windows[0].after(2000, close_all)
+            windows[0].after(2000, close_all)
 
     def take_screenshot(self):
         try:
