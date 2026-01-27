@@ -14,6 +14,20 @@ from pathlib import Path
 import rumps
 from PIL import Image, ImageGrab
 import mss
+
+# Try Quartz for native hotkey support (no Input Monitoring needed for some key combos)
+try:
+    from Quartz import (
+        CGEventTapCreate, CGEventTapEnable, CFMachPortCreateRunLoopSource,
+        CFRunLoopGetCurrent, CFRunLoopAddSource, CFRunLoopRun,
+        kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventKeyDown,
+        CGEventGetIntegerValueField, kCGKeyboardEventKeycode,
+        kCFRunLoopCommonModes
+    )
+    QUARTZ_AVAILABLE = True
+except ImportError:
+    QUARTZ_AVAILABLE = False
+
 from pynput import keyboard as pynput_keyboard
 
 # Config file path
@@ -207,9 +221,52 @@ class AutoScreenApp(rumps.App):
                 pass
 
         hotkey = self.config["hotkey"]
+
+        # Convert our hotkey format to pynput GlobalHotKeys format
+        # e.g., "cmd+shift+s" -> "<cmd>+<shift>+s"
+        # e.g., "f12" -> "<f12>"
+        hotkey_parts = hotkey.lower().replace(' ', '').split('+')
+        pynput_parts = []
+
+        for part in hotkey_parts:
+            if part in ('ctrl', 'control'):
+                pynput_parts.append('<ctrl>')
+            elif part in ('alt', 'option'):
+                pynput_parts.append('<alt>')
+            elif part in ('shift',):
+                pynput_parts.append('<shift>')
+            elif part in ('cmd', 'command', 'super', 'win'):
+                pynput_parts.append('<cmd>')
+            elif part.startswith('f') and part[1:].isdigit():
+                # F-keys like f1, f12
+                pynput_parts.append(f'<{part}>')
+            else:
+                pynput_parts.append(part)
+
+        pynput_hotkey = '+'.join(pynput_parts)
+        print(f"Registering hotkey: {hotkey} -> {pynput_hotkey}")
+
+        def on_activate():
+            print(f"Hotkey {pynput_hotkey} activated!")
+            # Use thread to avoid blocking
+            threading.Thread(target=self.take_screenshot, daemon=True).start()
+
+        try:
+            self.hotkey_listener = pynput_keyboard.GlobalHotKeys({
+                pynput_hotkey: on_activate
+            })
+            self.hotkey_listener.start()
+            print(f"Hotkey listener started for: {pynput_hotkey}")
+        except Exception as e:
+            print(f"Error registering hotkey: {e}")
+            # Fallback: try with basic Listener
+            self._register_hotkey_fallback(hotkey)
+
+    def _register_hotkey_fallback(self, hotkey):
+        """Fallback hotkey registration using basic Listener."""
+        print("Using fallback hotkey listener...")
         hotkey_parts = hotkey.lower().replace(' ', '').split('+')
 
-        # Separate modifiers from the main key
         required_modifiers = set()
         target_key = None
 
@@ -223,73 +280,59 @@ class AutoScreenApp(rumps.App):
             elif part in ('cmd', 'command', 'super', 'win'):
                 required_modifiers.add('cmd')
             elif part.startswith('f') and part[1:].isdigit():
-                # F-keys like f1, f12
                 target_key = part
             elif len(part) == 1:
                 target_key = part
             else:
                 target_key = part
 
-        # Track currently pressed modifiers
         pressed_modifiers = set()
 
-        def normalize_key(key):
-            """Get the base key character, ignoring Option modifier effects."""
-            # Handle F-keys (they come as Key.f1, Key.f2, etc.)
-            if isinstance(key, pynput_keyboard.Key):
-                key_name = key.name if hasattr(key, 'name') else str(key)
-                if key_name.startswith('f') and key_name[1:].isdigit():
-                    return key_name.lower()
-                return None
-
-            if hasattr(key, 'vk') and key.vk is not None:
-                # Map virtual key codes to characters (US keyboard layout)
-                vk_to_char = {
-                    0: 'a', 1: 's', 2: 'd', 3: 'f', 4: 'h', 5: 'g', 6: 'z', 7: 'x', 8: 'c', 9: 'v',
-                    11: 'b', 12: 'q', 13: 'w', 14: 'e', 15: 'r', 16: 'y', 17: 't', 18: '1', 19: '2',
-                    20: '3', 21: '4', 22: '6', 23: '5', 24: '=', 25: '9', 26: '7', 27: '-', 28: '8',
-                    29: '0', 31: 'o', 32: 'u', 34: 'i', 35: 'p', 37: 'l', 38: 'j', 40: 'k', 41: ';',
-                    43: ',', 45: 'n', 46: 'm', 47: '.', 50: '`',
-                }
-                return vk_to_char.get(key.vk)
-            if hasattr(key, 'char') and key.char:
-                return key.char.lower()
-            return None
-
         def on_press(key):
-            # Track modifier keys
-            if key == pynput_keyboard.Key.ctrl or key == pynput_keyboard.Key.ctrl_l or key == pynput_keyboard.Key.ctrl_r:
-                pressed_modifiers.add('ctrl')
-            elif key == pynput_keyboard.Key.alt or key == pynput_keyboard.Key.alt_l or key == pynput_keyboard.Key.alt_r:
-                pressed_modifiers.add('alt')
-            elif key == pynput_keyboard.Key.shift or key == pynput_keyboard.Key.shift_l or key == pynput_keyboard.Key.shift_r:
-                pressed_modifiers.add('shift')
-            elif key == pynput_keyboard.Key.cmd or key == pynput_keyboard.Key.cmd_l or key == pynput_keyboard.Key.cmd_r:
-                pressed_modifiers.add('cmd')
-            else:
-                # Check if this is the target key and all modifiers are pressed
+            nonlocal pressed_modifiers
+
+            # Track modifiers
+            if hasattr(key, 'name'):
+                if 'ctrl' in key.name:
+                    pressed_modifiers.add('ctrl')
+                    return
+                elif 'alt' in key.name:
+                    pressed_modifiers.add('alt')
+                    return
+                elif 'shift' in key.name:
+                    pressed_modifiers.add('shift')
+                    return
+                elif 'cmd' in key.name:
+                    pressed_modifiers.add('cmd')
+                    return
+
+            # Check for target key
+            key_name = None
+            if hasattr(key, 'name'):
+                key_name = key.name.lower()
+            elif hasattr(key, 'char') and key.char:
+                key_name = key.char.lower()
+
+            if key_name and target_key and key_name == target_key:
                 if required_modifiers == pressed_modifiers:
-                    key_char = normalize_key(key)
-                    if key_char and target_key and key_char == target_key.lower():
-                        self.take_screenshot()
+                    print(f"Fallback: Taking screenshot!")
+                    threading.Thread(target=self.take_screenshot, daemon=True).start()
 
         def on_release(key):
-            # Remove modifier from tracking
-            if key == pynput_keyboard.Key.ctrl or key == pynput_keyboard.Key.ctrl_l or key == pynput_keyboard.Key.ctrl_r:
-                pressed_modifiers.discard('ctrl')
-            elif key == pynput_keyboard.Key.alt or key == pynput_keyboard.Key.alt_l or key == pynput_keyboard.Key.alt_r:
-                pressed_modifiers.discard('alt')
-            elif key == pynput_keyboard.Key.shift or key == pynput_keyboard.Key.shift_l or key == pynput_keyboard.Key.shift_r:
-                pressed_modifiers.discard('shift')
-            elif key == pynput_keyboard.Key.cmd or key == pynput_keyboard.Key.cmd_l or key == pynput_keyboard.Key.cmd_r:
-                pressed_modifiers.discard('cmd')
+            nonlocal pressed_modifiers
+            if hasattr(key, 'name'):
+                if 'ctrl' in key.name:
+                    pressed_modifiers.discard('ctrl')
+                elif 'alt' in key.name:
+                    pressed_modifiers.discard('alt')
+                elif 'shift' in key.name:
+                    pressed_modifiers.discard('shift')
+                elif 'cmd' in key.name:
+                    pressed_modifiers.discard('cmd')
 
-        self.hotkey_listener = pynput_keyboard.Listener(
-            on_press=on_press,
-            on_release=on_release
-        )
+        self.hotkey_listener = pynput_keyboard.Listener(on_press=on_press, on_release=on_release)
         self.hotkey_listener.start()
-        print(f"Hotkey registered: {hotkey}")
+        print(f"Fallback hotkey registered: {hotkey}")
 
     def take_screenshot_clicked(self, _):
         self.take_screenshot()
