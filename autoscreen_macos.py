@@ -208,37 +208,80 @@ class AutoScreenApp(rumps.App):
 
         hotkey = self.config["hotkey"]
         hotkey_parts = hotkey.lower().replace(' ', '').split('+')
-        hotkey_set = set()
+
+        # Separate modifiers from the main key
+        required_modifiers = set()
+        target_key = None
 
         for part in hotkey_parts:
             if part in ('ctrl', 'control'):
-                hotkey_set.add(pynput_keyboard.Key.ctrl)
+                required_modifiers.add('ctrl')
             elif part in ('alt', 'option'):
-                hotkey_set.add(pynput_keyboard.Key.alt)
+                required_modifiers.add('alt')
             elif part in ('shift',):
-                hotkey_set.add(pynput_keyboard.Key.shift)
+                required_modifiers.add('shift')
             elif part in ('cmd', 'command', 'super', 'win'):
-                hotkey_set.add(pynput_keyboard.Key.cmd)
+                required_modifiers.add('cmd')
+            elif part.startswith('f') and part[1:].isdigit():
+                # F-keys like f1, f12
+                target_key = part
             elif len(part) == 1:
-                hotkey_set.add(pynput_keyboard.KeyCode.from_char(part))
+                target_key = part
             else:
-                try:
-                    hotkey_set.add(getattr(pynput_keyboard.Key, part))
-                except AttributeError:
-                    pass
+                target_key = part
 
-        current_keys = set()
+        # Track currently pressed modifiers
+        pressed_modifiers = set()
+
+        def normalize_key(key):
+            """Get the base key character, ignoring Option modifier effects."""
+            if hasattr(key, 'vk') and key.vk is not None:
+                # Map virtual key codes to characters (US keyboard layout)
+                # vk codes: a=0, s=1, d=2, f=3, h=4, g=5, z=6, x=7, c=8, v=9, b=11, q=12, w=13, e=14, r=15, y=16, t=17
+                # 1=18, 2=19, 3=20, 4=21, 6=22, 5=23, 9=25, 7=26, 8=28, 0=29, o=31, u=32, i=34, p=35, l=37, j=38
+                # k=40, n=45, m=46
+                vk_to_char = {
+                    0: 'a', 1: 's', 2: 'd', 3: 'f', 4: 'h', 5: 'g', 6: 'z', 7: 'x', 8: 'c', 9: 'v',
+                    11: 'b', 12: 'q', 13: 'w', 14: 'e', 15: 'r', 16: 'y', 17: 't', 18: '1', 19: '2',
+                    20: '3', 21: '4', 22: '6', 23: '5', 24: '=', 25: '9', 26: '7', 27: '-', 28: '8',
+                    29: '0', 31: 'o', 32: 'u', 34: 'i', 35: 'p', 37: 'l', 38: 'j', 40: 'k', 41: ';',
+                    43: ',', 45: 'n', 46: 'm', 47: '.', 50: '`',
+                    # F-keys
+                    122: 'f1', 120: 'f2', 99: 'f3', 118: 'f4', 96: 'f5', 97: 'f6', 98: 'f7',
+                    100: 'f8', 101: 'f9', 109: 'f10', 103: 'f11', 111: 'f12',
+                }
+                return vk_to_char.get(key.vk)
+            if hasattr(key, 'char') and key.char:
+                return key.char.lower()
+            return None
 
         def on_press(key):
-            current_keys.add(key)
-            if hotkey_set.issubset(current_keys):
-                self.take_screenshot()
+            # Track modifier keys
+            if key == pynput_keyboard.Key.ctrl or key == pynput_keyboard.Key.ctrl_l or key == pynput_keyboard.Key.ctrl_r:
+                pressed_modifiers.add('ctrl')
+            elif key == pynput_keyboard.Key.alt or key == pynput_keyboard.Key.alt_l or key == pynput_keyboard.Key.alt_r:
+                pressed_modifiers.add('alt')
+            elif key == pynput_keyboard.Key.shift or key == pynput_keyboard.Key.shift_l or key == pynput_keyboard.Key.shift_r:
+                pressed_modifiers.add('shift')
+            elif key == pynput_keyboard.Key.cmd or key == pynput_keyboard.Key.cmd_l or key == pynput_keyboard.Key.cmd_r:
+                pressed_modifiers.add('cmd')
+            else:
+                # Check if this is the target key and all modifiers are pressed
+                if required_modifiers == pressed_modifiers:
+                    key_char = normalize_key(key)
+                    if key_char and target_key and key_char == target_key.lower():
+                        self.take_screenshot()
 
         def on_release(key):
-            try:
-                current_keys.discard(key)
-            except:
-                pass
+            # Remove modifier from tracking
+            if key == pynput_keyboard.Key.ctrl or key == pynput_keyboard.Key.ctrl_l or key == pynput_keyboard.Key.ctrl_r:
+                pressed_modifiers.discard('ctrl')
+            elif key == pynput_keyboard.Key.alt or key == pynput_keyboard.Key.alt_l or key == pynput_keyboard.Key.alt_r:
+                pressed_modifiers.discard('alt')
+            elif key == pynput_keyboard.Key.shift or key == pynput_keyboard.Key.shift_l or key == pynput_keyboard.Key.shift_r:
+                pressed_modifiers.discard('shift')
+            elif key == pynput_keyboard.Key.cmd or key == pynput_keyboard.Key.cmd_l or key == pynput_keyboard.Key.cmd_r:
+                pressed_modifiers.discard('cmd')
 
         self.hotkey_listener = pynput_keyboard.Listener(
             on_press=on_press,
