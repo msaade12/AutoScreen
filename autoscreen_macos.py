@@ -235,20 +235,21 @@ class AutoScreenApp(rumps.App):
 
         def normalize_key(key):
             """Get the base key character, ignoring Option modifier effects."""
+            # Handle F-keys (they come as Key.f1, Key.f2, etc.)
+            if isinstance(key, pynput_keyboard.Key):
+                key_name = key.name if hasattr(key, 'name') else str(key)
+                if key_name.startswith('f') and key_name[1:].isdigit():
+                    return key_name.lower()
+                return None
+
             if hasattr(key, 'vk') and key.vk is not None:
                 # Map virtual key codes to characters (US keyboard layout)
-                # vk codes: a=0, s=1, d=2, f=3, h=4, g=5, z=6, x=7, c=8, v=9, b=11, q=12, w=13, e=14, r=15, y=16, t=17
-                # 1=18, 2=19, 3=20, 4=21, 6=22, 5=23, 9=25, 7=26, 8=28, 0=29, o=31, u=32, i=34, p=35, l=37, j=38
-                # k=40, n=45, m=46
                 vk_to_char = {
                     0: 'a', 1: 's', 2: 'd', 3: 'f', 4: 'h', 5: 'g', 6: 'z', 7: 'x', 8: 'c', 9: 'v',
                     11: 'b', 12: 'q', 13: 'w', 14: 'e', 15: 'r', 16: 'y', 17: 't', 18: '1', 19: '2',
                     20: '3', 21: '4', 22: '6', 23: '5', 24: '=', 25: '9', 26: '7', 27: '-', 28: '8',
                     29: '0', 31: 'o', 32: 'u', 34: 'i', 35: 'p', 37: 'l', 38: 'j', 40: 'k', 41: ';',
                     43: ',', 45: 'n', 46: 'm', 47: '.', 50: '`',
-                    # F-keys
-                    122: 'f1', 120: 'f2', 99: 'f3', 118: 'f4', 96: 'f5', 97: 'f6', 98: 'f7',
-                    100: 'f8', 101: 'f9', 109: 'f10', 103: 'f11', 111: 'f12',
                 }
                 return vk_to_char.get(key.vk)
             if hasattr(key, 'char') and key.char:
