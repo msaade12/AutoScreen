@@ -102,57 +102,29 @@ def copy_image_to_clipboard(image):
             print("Screenshot copied to clipboard")
 
         elif platform.system() == "Windows":
-            # Use win32clipboard via ctypes
-            import ctypes
-            from ctypes import wintypes
+            # Save to temp file and use PowerShell to copy to clipboard
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                image.save(tmp.name, 'PNG')
+                tmp_path = tmp.name
 
-            # Convert image to BMP format for clipboard
-            output = io.BytesIO()
-            image.convert('RGB').save(output, 'BMP')
-            data = output.getvalue()[14:]  # Remove BMP header (14 bytes file header)
-            output.close()
+            # Use PowerShell to copy image to clipboard
+            ps_script = f'''
+            Add-Type -AssemblyName System.Windows.Forms
+            $image = [System.Drawing.Image]::FromFile("{tmp_path.replace(chr(92), '/')}")
+            [System.Windows.Forms.Clipboard]::SetImage($image)
+            $image.Dispose()
+            '''
+            result = subprocess.run(
+                ['powershell', '-ExecutionPolicy', 'Bypass', '-Command', ps_script],
+                capture_output=True,
+                text=True
+            )
+            os.unlink(tmp_path)
 
-            CF_DIB = 8
-            GMEM_MOVEABLE = 0x0002
-
-            kernel32 = ctypes.windll.kernel32
-            user32 = ctypes.windll.user32
-
-            # Set proper return types
-            kernel32.GlobalAlloc.restype = ctypes.c_void_p
-            kernel32.GlobalLock.restype = ctypes.c_void_p
-            kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
-            user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
-
-            # Open clipboard
-            if not user32.OpenClipboard(None):
-                print("Failed to open clipboard")
-                return False
-
-            try:
-                user32.EmptyClipboard()
-
-                hMem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
-                if not hMem:
-                    print("Failed to allocate memory")
-                    return False
-
-                pMem = kernel32.GlobalLock(hMem)
-                if not pMem:
-                    print("Failed to lock memory")
-                    return False
-
-                ctypes.memmove(pMem, data, len(data))
-                kernel32.GlobalUnlock(hMem)
-
-                if not user32.SetClipboardData(CF_DIB, hMem):
-                    print("Failed to set clipboard data")
-                    return False
-
+            if result.returncode == 0:
                 print("Screenshot copied to clipboard")
-                return True
-            finally:
-                user32.CloseClipboard()
+            else:
+                print(f"Failed to copy to clipboard: {result.stderr}")
 
         else:  # Linux
             # Try xclip
