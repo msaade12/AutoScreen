@@ -55,12 +55,13 @@ jobs:
         run: |
           /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" dist/AutoScreen.app/Contents/Info.plist
 
-      - name: Create DMG
+      - name: Create installer DMG
         run: |
-          mkdir -p dist/dmg_temp
-          cp -R dist/AutoScreen.app dist/dmg_temp/
-          hdiutil create -volname "AutoScreen" -srcfolder dist/dmg_temp -ov -format UDZO dist/AutoScreen-macOS.dmg
-          rm -rf dist/dmg_temp
+          mkdir -p dist/dmg_contents
+          cp -R dist/AutoScreen.app dist/dmg_contents/
+          ln -sf /Applications dist/dmg_contents/Applications
+          hdiutil create -volname "AutoScreen" -srcfolder dist/dmg_contents -ov -format UDZO dist/AutoScreen-macOS.dmg
+          rm -rf dist/dmg_contents
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
