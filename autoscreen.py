@@ -109,7 +109,7 @@ def copy_image_to_clipboard(image):
             # Convert image to BMP format for clipboard
             output = io.BytesIO()
             image.convert('RGB').save(output, 'BMP')
-            data = output.getvalue()[14:]  # Remove BMP header
+            data = output.getvalue()[14:]  # Remove BMP header (14 bytes file header)
             output.close()
 
             CF_DIB = 8
@@ -118,17 +118,41 @@ def copy_image_to_clipboard(image):
             kernel32 = ctypes.windll.kernel32
             user32 = ctypes.windll.user32
 
-            user32.OpenClipboard(None)
-            user32.EmptyClipboard()
+            # Set proper return types
+            kernel32.GlobalAlloc.restype = ctypes.c_void_p
+            kernel32.GlobalLock.restype = ctypes.c_void_p
+            kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+            user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
 
-            hMem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
-            pMem = kernel32.GlobalLock(hMem)
-            ctypes.memmove(pMem, data, len(data))
-            kernel32.GlobalUnlock(hMem)
+            # Open clipboard
+            if not user32.OpenClipboard(None):
+                print("Failed to open clipboard")
+                return False
 
-            user32.SetClipboardData(CF_DIB, hMem)
-            user32.CloseClipboard()
-            print("Screenshot copied to clipboard")
+            try:
+                user32.EmptyClipboard()
+
+                hMem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+                if not hMem:
+                    print("Failed to allocate memory")
+                    return False
+
+                pMem = kernel32.GlobalLock(hMem)
+                if not pMem:
+                    print("Failed to lock memory")
+                    return False
+
+                ctypes.memmove(pMem, data, len(data))
+                kernel32.GlobalUnlock(hMem)
+
+                if not user32.SetClipboardData(CF_DIB, hMem):
+                    print("Failed to set clipboard data")
+                    return False
+
+                print("Screenshot copied to clipboard")
+                return True
+            finally:
+                user32.CloseClipboard()
 
         else:  # Linux
             # Try xclip
