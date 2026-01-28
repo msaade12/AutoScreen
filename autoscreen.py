@@ -102,29 +102,23 @@ def copy_image_to_clipboard(image):
             print("Screenshot copied to clipboard")
 
         elif platform.system() == "Windows":
-            # Save to temp file and use PowerShell to copy to clipboard
-            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                image.save(tmp.name, 'PNG')
-                tmp_path = tmp.name
+            # Use win32clipboard from pywin32
+            import win32clipboard
+            from io import BytesIO
 
-            # Use PowerShell to copy image to clipboard
-            ps_script = f'''
-            Add-Type -AssemblyName System.Windows.Forms
-            $image = [System.Drawing.Image]::FromFile("{tmp_path.replace(chr(92), '/')}")
-            [System.Windows.Forms.Clipboard]::SetImage($image)
-            $image.Dispose()
-            '''
-            result = subprocess.run(
-                ['powershell', '-ExecutionPolicy', 'Bypass', '-Command', ps_script],
-                capture_output=True,
-                text=True
-            )
-            os.unlink(tmp_path)
+            # Convert to BMP format for clipboard
+            output = BytesIO()
+            image.convert('RGB').save(output, 'BMP')
+            bmp_data = output.getvalue()[14:]  # Skip BMP file header
+            output.close()
 
-            if result.returncode == 0:
+            win32clipboard.OpenClipboard()
+            try:
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(win32clipboard.CF_DIB, bmp_data)
                 print("Screenshot copied to clipboard")
-            else:
-                print(f"Failed to copy to clipboard: {result.stderr}")
+            finally:
+                win32clipboard.CloseClipboard()
 
         else:  # Linux
             # Try xclip

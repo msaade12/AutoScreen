@@ -84,7 +84,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller pystray keyboard pynput Pillow mss
+          pip install pyinstaller pystray keyboard pynput Pillow mss pywin32
 
       - name: Build Windows exe
         run: |
