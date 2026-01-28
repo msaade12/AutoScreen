@@ -25,11 +25,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller rumps pynput Pillow mss
 
+      - name: Create menu bar icon
+        run: |
+          python -c "
+          from PIL import Image, ImageDraw
+          size = 22
+          img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+          draw = ImageDraw.Draw(img)
+          draw.rounded_rectangle([2, 6, 20, 18], radius=2, fill=(0, 0, 0, 255))
+          draw.ellipse([7, 8, 15, 16], fill=(255, 255, 255, 255))
+          draw.ellipse([9, 10, 13, 14], fill=(0, 0, 0, 255))
+          draw.rectangle([4, 4, 8, 6], fill=(0, 0, 0, 255))
+          img.save('icon_menubar.png')
+          "
+
       - name: Build macOS app
         run: |
           python -m PyInstaller --noconfirm --onedir --windowed \
             --name AutoScreen \
             --osx-bundle-identifier com.autoscreen.app \
+            --add-data "icon_menubar.png:." \
             --hidden-import rumps \
             --hidden-import PIL \
             --hidden-import mss \

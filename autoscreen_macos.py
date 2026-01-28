@@ -75,9 +75,25 @@ def copy_image_to_clipboard(image):
         return False
 
 
+def get_icon_path():
+    """Get path to menu bar icon, works both in dev and bundled app."""
+    if getattr(sys, 'frozen', False):
+        # Running as bundled app
+        base_path = sys._MEIPASS
+    else:
+        # Running in development
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, 'icon_menubar.png')
+
+
 class AutoScreenApp(rumps.App):
     def __init__(self):
-        super().__init__("AutoScreen", icon=None, quit_button=None)
+        icon_path = get_icon_path()
+        # Use icon if exists, otherwise fall back to text
+        if os.path.exists(icon_path):
+            super().__init__("", icon=icon_path, quit_button=None)
+        else:
+            super().__init__("📷", icon=None, quit_button=None)
         self.config = self.load_config()
         self.hotkey_listener = None
 
