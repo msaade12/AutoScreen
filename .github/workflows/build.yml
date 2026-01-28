@@ -90,11 +90,17 @@ jobs:
         run: |
           python -m PyInstaller --noconfirm --onefile --windowed --name AutoScreen autoscreen.py
 
+      - name: Create Windows installer
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer.iss
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: AutoScreen-Windows
-          path: dist/AutoScreen.exe
+          path: |
+            dist/AutoScreen.exe
+            installer/AutoScreen-Setup.exe
 
   release:
     needs: [build-macos, build-windows]
@@ -109,7 +115,7 @@ jobs:
         with:
           files: |
             AutoScreen-macOS/AutoScreen-macOS.dmg
-            AutoScreen-Windows/AutoScreen.exe
+            AutoScreen-Windows/AutoScreen-Setup.exe
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
