@@ -36,6 +36,10 @@ jobs:
             --hidden-import pynput \
             autoscreen_macos.py
 
+      - name: Configure as menu bar app (hide from Dock)
+        run: |
+          /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" dist/AutoScreen.app/Contents/Info.plist
+
       - name: Create DMG
         run: |
           mkdir -p dist/dmg_temp
