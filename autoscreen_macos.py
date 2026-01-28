@@ -239,9 +239,11 @@ class AutoScreenApp(rumps.App):
             if result.returncode == 0 and result.stdout.strip():
                 new_hotkey = result.stdout.strip().lower().replace(' ', '')
                 if new_hotkey:
+                    print(f"Setting custom hotkey: {new_hotkey}")
                     self.set_hotkey(new_hotkey)
         except Exception as e:
             print(f"Error setting custom hotkey: {e}")
+            rumps.notification("AutoScreen", "Error", f"Could not set hotkey: {e}")
 
     def set_hotkey(self, hotkey):
         self.config["hotkey"] = hotkey
@@ -316,24 +318,8 @@ class AutoScreenApp(rumps.App):
             else:
                 pynput_parts.append(part)
 
-        pynput_hotkey = '+'.join(pynput_parts)
-        print(f"Registering hotkey: {hotkey} -> {pynput_hotkey}")
-
-        def on_activate():
-            print(f"Hotkey {pynput_hotkey} activated!")
-            # Use thread to avoid blocking
-            threading.Thread(target=self.take_screenshot, daemon=True).start()
-
-        try:
-            self.hotkey_listener = pynput_keyboard.GlobalHotKeys({
-                pynput_hotkey: on_activate
-            })
-            self.hotkey_listener.start()
-            print(f"Hotkey listener started for: {pynput_hotkey}")
-        except Exception as e:
-            print(f"Error registering hotkey: {e}")
-            # Fallback: try with basic Listener
-            self._register_hotkey_fallback(hotkey)
+        # Always use the reliable fallback listener (GlobalHotKeys doesn't work well on macOS)
+        self._register_hotkey_fallback(hotkey)
 
     def _register_hotkey_fallback(self, hotkey):
         """Fallback hotkey registration using basic Listener."""
@@ -361,47 +347,62 @@ class AutoScreenApp(rumps.App):
 
         pressed_modifiers = set()
 
+        # Virtual key code mapping for reliable key detection
+        vk_to_char = {
+            0: 'a', 1: 's', 2: 'd', 3: 'f', 4: 'h', 5: 'g', 6: 'z', 7: 'x', 8: 'c', 9: 'v',
+            11: 'b', 12: 'q', 13: 'w', 14: 'e', 15: 'r', 16: 'y', 17: 't', 18: '1', 19: '2',
+            20: '3', 21: '4', 22: '6', 23: '5', 24: '=', 25: '9', 26: '7', 27: '-', 28: '8',
+            29: '0', 31: 'o', 32: 'u', 34: 'i', 35: 'p', 37: 'l', 38: 'j', 40: 'k', 45: 'n', 46: 'm',
+        }
+
         def on_press(key):
             nonlocal pressed_modifiers
 
-            # Track modifiers
-            if hasattr(key, 'name'):
-                if 'ctrl' in key.name:
+            # Track modifiers using direct Key comparison
+            try:
+                if key in (pynput_keyboard.Key.ctrl, pynput_keyboard.Key.ctrl_l, pynput_keyboard.Key.ctrl_r):
                     pressed_modifiers.add('ctrl')
                     return
-                elif 'alt' in key.name:
+                elif key in (pynput_keyboard.Key.alt, pynput_keyboard.Key.alt_l, pynput_keyboard.Key.alt_r):
                     pressed_modifiers.add('alt')
                     return
-                elif 'shift' in key.name:
+                elif key in (pynput_keyboard.Key.shift, pynput_keyboard.Key.shift_l, pynput_keyboard.Key.shift_r):
                     pressed_modifiers.add('shift')
                     return
-                elif 'cmd' in key.name:
+                elif key in (pynput_keyboard.Key.cmd, pynput_keyboard.Key.cmd_l, pynput_keyboard.Key.cmd_r):
                     pressed_modifiers.add('cmd')
                     return
+            except:
+                pass
 
-            # Check for target key
+            # Get key name using vk code for reliability
             key_name = None
-            if hasattr(key, 'name'):
-                key_name = key.name.lower()
-            elif hasattr(key, 'char') and key.char:
+            if hasattr(key, 'vk') and key.vk is not None:
+                key_name = vk_to_char.get(key.vk)
+            if not key_name and hasattr(key, 'char') and key.char:
                 key_name = key.char.lower()
+            if not key_name and hasattr(key, 'name') and key.name:
+                key_name = key.name.lower()
 
-            if key_name and target_key and key_name == target_key:
+            # Check if this is our target key with correct modifiers
+            if key_name and target_key and key_name == target_key.lower():
                 if required_modifiers == pressed_modifiers:
-                    print(f"Fallback: Taking screenshot!")
+                    print(f"HOTKEY TRIGGERED: {hotkey}")
                     threading.Thread(target=self.take_screenshot, daemon=True).start()
 
         def on_release(key):
             nonlocal pressed_modifiers
-            if hasattr(key, 'name'):
-                if 'ctrl' in key.name:
+            try:
+                if key in (pynput_keyboard.Key.ctrl, pynput_keyboard.Key.ctrl_l, pynput_keyboard.Key.ctrl_r):
                     pressed_modifiers.discard('ctrl')
-                elif 'alt' in key.name:
+                elif key in (pynput_keyboard.Key.alt, pynput_keyboard.Key.alt_l, pynput_keyboard.Key.alt_r):
                     pressed_modifiers.discard('alt')
-                elif 'shift' in key.name:
+                elif key in (pynput_keyboard.Key.shift, pynput_keyboard.Key.shift_l, pynput_keyboard.Key.shift_r):
                     pressed_modifiers.discard('shift')
-                elif 'cmd' in key.name:
+                elif key in (pynput_keyboard.Key.cmd, pynput_keyboard.Key.cmd_l, pynput_keyboard.Key.cmd_r):
                     pressed_modifiers.discard('cmd')
+            except:
+                pass
 
         self.hotkey_listener = pynput_keyboard.Listener(on_press=on_press, on_release=on_release)
         self.hotkey_listener.start()
@@ -410,8 +411,17 @@ class AutoScreenApp(rumps.App):
     def take_screenshot_clicked(self, _):
         self.take_screenshot()
 
+    def play_sound(self):
+        """Play screenshot sound."""
+        try:
+            subprocess.Popen(['afplay', '/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/acknowledgment_sent.caf'],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except:
+            pass
+
     def take_screenshot(self):
         try:
+            self.play_sound()
             os.makedirs(self.config["save_folder"], exist_ok=True)
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             filename = f"screenshot_{timestamp}.png"
