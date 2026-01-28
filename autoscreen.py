@@ -242,8 +242,21 @@ class ScreenshotApp:
 
             windows[0].after(2000, close_all)
 
+    def play_sound(self):
+        """Play screenshot sound."""
+        try:
+            if platform.system() == "Windows":
+                import winsound
+                winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC)
+            elif platform.system() == "Darwin":
+                subprocess.Popen(['afplay', '/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/acknowledgment_sent.caf'],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except:
+            pass
+
     def take_screenshot(self):
         try:
+            self.play_sound()
             os.makedirs(self.config["save_folder"], exist_ok=True)
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             filename = f"screenshot_{timestamp}.png"
